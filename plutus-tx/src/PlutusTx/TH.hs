@@ -46,6 +46,7 @@ going to typecheck, and the result is always a 'CompiledCode', so that's also fi
 -- | Compile a quoted Haskell expression into a corresponding Plutus Core program.
 compileUntyped :: TH.Q TH.Exp -> TH.Q TH.Exp
 compileUntyped e = do
-  TH.addCorePlugin "Plinth.Plugin"
+  -- uplc-ghc loads the plugin statically, so don't add it here.
+  -- TH.addCorePlugin "Plinth.Plugin"
   -- See Note [Typed TH]
   [|plinthc $(e)|]
