@@ -48,7 +48,7 @@ common ghc-version-support
     buildable: False
 
 common os-support
-  if (impl(ghcjs) || os(windows))
+  if impl(ghcjs)
     buildable: False
 
 library
