@@ -67,7 +67,7 @@ common workaround-issue-7415
     ghc-prof-options: -fno-prof-auto
 
 common os-support
-  if (impl(ghcjs) || os(windows))
+  if impl(ghcjs)
     buildable: False
 
 library
