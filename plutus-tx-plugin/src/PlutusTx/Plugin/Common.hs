@@ -72,6 +72,13 @@ import GHC.Tc.Utils.Monad qualified as GHC
 import GHC.Types.TyThing qualified as GHC
 import GHC.Unit.Finder qualified as GHC
 
+-- Extra GHC imports for unit-id-agnostic name resolution.
+-- See Note [Unit-id-agnostic name resolution].
+import GHC.Driver.Env (hsc_units)
+import GHC.Iface.Env (lookupNameCache)
+import GHC.ThToHs (thRdrNameGuesses)
+import GHC.Unit.State (lookupModuleInAllUnits)
+
 import Control.Exception (SomeException, throwIO, try)
 import Control.Lens
 import Control.Monad
@@ -84,7 +91,7 @@ import Data.ByteString.Unsafe qualified as BSUnsafe
 import Data.Either.Validation
 import Data.Generics.Uniplate.Data
 import Data.Map qualified as Map
-import Data.Maybe (fromJust, mapMaybe, maybeToList)
+import Data.Maybe (catMaybes, fromJust, listToMaybe, mapMaybe, maybeToList)
 import Data.Monoid.Extra (mwhen)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -360,9 +367,9 @@ mkPluginPass :: TH.Name -> PluginOptions -> GHC.CoreToDo
 mkPluginPass markerTHName opts = GHC.CoreDoPluginPass "Core to PLC" $ \guts -> do
   -- Family env code borrowed from SimplCore
   p_fam_env <- GHC.getPackageFamInstEnv
-  -- See Note [Marker resolution]
-  maybeMarkerName <- GHC.thNameToGhcName markerTHName
-  maybeanchorGhcName <- GHC.thNameToGhcName 'PlutusTx.Plugin.Utils.anchor
+  -- See Note [Marker resolution] and Note [Unit-id-agnostic name resolution]
+  maybeMarkerName <- thNameToGhcNameUnitAgnostic markerTHName
+  maybeanchorGhcName <- thNameToGhcNameUnitAgnostic 'PlutusTx.Plugin.Utils.anchor
   case (maybeMarkerName, maybeanchorGhcName) of
     -- See Note [Marker resolution]
     (Just markerName, Just anchorGhcName) -> do
@@ -940,10 +947,51 @@ generateCertificate packageName moduleName opts simplTrace certifyPath = do
 -- | Get the 'GHC.Name' corresponding to the given 'TH.Name', or throw an error if we can't get it.
 thNameToGhcNameOrFail :: TH.Name -> PluginM uni fun GHC.Name
 thNameToGhcNameOrFail name = do
-  maybeName <- lift . lift $ GHC.thNameToGhcName name
+  maybeName <- lift . lift $ thNameToGhcNameUnitAgnostic name
   case maybeName of
     Just n -> pure n
     Nothing -> throwError . NoContext $ CoreNameLookupError name
+
+{- Note [Unit-id-agnostic name resolution]
+The plugin resolves Template Haskell names ('plc, ''CompiledCode, 'mkCompiledCode
+and the builtins) to GHC 'Name's and then matches user code against them by
+'Name' equality, which includes the package's *unit-id*. The unit-id is baked in
+at the time the plugin is compiled (against some build of plutus-tx[-plugin]).
+
+When the plugin is built into the compiler (uplc-ghc), a user's project may
+depend on a plutus-tx[-plugin] with a *different* unit-id -- e.g. one fetched
+from a source-repository-package or from CHaP rather than the local build the
+compiler was built against. A plain 'GHC.thNameToGhcName' would then resolve the
+names against the baked-in unit-id, so the resolved 'Name's never match the
+user's code and the 'plc' marker is never replaced (the program fails at runtime
+with "the plc placeholder must have been replaced ...").
+
+'thNameToGhcNameUnitAgnostic' mirrors 'GHC.thNameToGhcNameIO' but, for Orig
+names, re-points the module at whatever in-scope unit *exposes that module*
+(via 'lookupModuleInAllUnits'), so resolution does not depend on the exact
+unit-id. This relies on the modules we resolve names from (PlutusTx.Code,
+PlutusTx.Plugin.Utils, PlutusTx.Builtins.Internal, ...) being exposed. -}
+thNameToGhcNameUnitAgnostic :: TH.Name -> GHC.CoreM (Maybe GHC.Name)
+thNameToGhcNameUnitAgnostic th_name = do
+  hsc_env <- GHC.getHscEnv
+  let nc = GHC.hsc_NC hsc_env
+      us = hsc_units hsc_env
+  liftIO $ do
+    names <- traverse (resolve nc us) (thRdrNameGuesses th_name)
+    pure (listToMaybe (catMaybes names))
+  where
+    resolve nc us rdr
+      | Just n <- GHC.isExact_maybe rdr =
+          pure (if GHC.isExternalName n then Just n else Nothing)
+      | Just (m, occ) <- GHC.isOrig_maybe rdr =
+          Just <$> lookupNameCache nc (remapModule us m) occ
+      | otherwise = pure Nothing
+    -- Re-point the module at the in-scope unit that exposes it, ignoring the
+    -- unit-id baked into the TH name. Falls back to the original module.
+    remapModule us m =
+      case lookupModuleInAllUnits us (GHC.moduleName m) of
+        ((m', _) : _) -> m'
+        [] -> m
 
 -- | Create a GHC Core expression that will evaluate to the given ByteString at runtime.
 makeByteStringLiteral :: BS.ByteString -> PluginM uni fun GHC.CoreExpr
