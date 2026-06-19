@@ -25,6 +25,7 @@ import GHC.Unit.Finder qualified as GHC
 
 import Control.Monad.IO.Class
 import Data.Foldable
+import GHC.Data.Maybe (MaybeErr (..))
 import Data.Generics.Uniplate.Data
 import Data.Map (Map)
 import Data.Map qualified as Map
@@ -105,16 +106,46 @@ injectUnsupportedMarkers env = do
         hscEnv
         (GHC.mkModuleName unsupportedMarkerModule)
         GHC.NoPkgQual
-  unsupportedId <- case findResult of
+  case findResult of
     GHC.Found _ m -> do
-      GHC.tcLookupId =<< GHC.lookupOrig m (GHC.mkVarOcc unsupportedMarkerName)
-    _ ->
-      GHC.pprPanic
-        "Plinth Compiler"
-        (GHC.text $ "Could not find module " <> unsupportedMarkerModule)
-  let binds = GHC.tcg_binds env
-      binds' = Compat.modifyBinds (transformBi (wrapUnsupported unsupportedId)) binds
-  pure env {GHC.tcg_binds = binds'}
+      -- See Note [Tolerate non-Plinth modules under uplc-ghc]
+      name <- GHC.lookupOrig m (GHC.mkVarOcc unsupportedMarkerName)
+      mbThing <- liftIO $ GHC.lookupGlobal_maybe hscEnv name
+      case mbThing of
+        Succeeded (GHC.AnId unsupportedId) ->
+          let binds = GHC.tcg_binds env
+              binds' = Compat.modifyBinds (transformBi (wrapUnsupported unsupportedId)) binds
+           in pure env {GHC.tcg_binds = binds'}
+        _ -> pure env
+    _ -> pure env
+
+{- Note [Tolerate non-Plinth modules under uplc-ghc]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+uplc-ghc loads this plugin as a *static* plugin, so its typeCheckResultAction
+runs on every module it compiles, not only Plinth programs. The marker
+(unsupported, anchor, plinthc) lives in PlutusTx.Plugin.Utils, and we may only
+inject a reference to it when that module is reachable from the module under
+compilation -- i.e. its interface can be loaded. Otherwise the injected
+reference would be ill-scoped and GHC aborts with "Can't find interface-file
+declaration for ...".
+
+Two cases must be tolerated:
+
+  (1) PlutusTx.Plugin.Utils is not on the search path at all (a package that
+      does not depend on plutus-tx): 'findImportedModule' returns NotFound.
+
+  (2) It is in the home package (e.g. while compiling plutus-tx's own modules,
+      which do not depend on PlutusTx.Plugin.Utils): 'findImportedModule'
+      returns Found, but the interface is not reachable from this module's
+      imports.
+
+We probe reachability with 'lookupGlobal_maybe', which loads the marker's Id
+from the home/external package tables and returns 'Failed' (rather than
+throwing) when the interface is not reachable. Only when it succeeds is there
+something to mark, so otherwise we leave the module unchanged. A dynamically
+loaded plugin would only ever run on modules that requested it via -fplugin,
+where the marker is always reachable.
+-}
 
 wrapUnsupported :: GHC.Id -> GHC.LHsExpr GHC.GhcTc -> GHC.LHsExpr GHC.GhcTc
 wrapUnsupported unsupportedId le@(GHC.L ann e)
