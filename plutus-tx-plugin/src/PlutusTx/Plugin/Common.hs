@@ -92,6 +92,7 @@ import Data.Either.Validation
 import Data.Generics.Uniplate.Data
 import Data.Map qualified as Map
 import Data.Maybe (catMaybes, fromJust, listToMaybe, mapMaybe, maybeToList)
+import GHC.Data.Maybe (MaybeErr (..))
 import Data.Monoid.Extra (mwhen)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -181,19 +182,24 @@ injectAnchors env = do
         hscEnv
         (GHC.mkModuleName plinthcModName)
         GHC.NoPkgQual
-  anchorId <- case findResult of
+  -- See Note [Tolerate non-Plinth modules under uplc-ghc] in PlutusTx.Plugin.Unsupported
+  mbAnchorId <- case findResult of
     GHC.Found _ m -> do
-      GHC.tcLookupId =<< GHC.lookupOrig m (GHC.mkVarOcc anchorName)
-    _ ->
-      GHC.pprPanic
-        "Plinth.Plugin"
-        (GHC.text $ "Could not find module " <> plinthcModName)
-  let binds = GHC.tcg_binds env
-      bindsAnchored =
-        Compat.modifyBinds
-          (transformBi (stripGuardAnchors anchorId) . transformBi (anchorExpr anchorId))
-          binds
-  pure env {GHC.tcg_binds = bindsAnchored}
+      name <- GHC.lookupOrig m (GHC.mkVarOcc anchorName)
+      mbThing <- liftIO $ GHC.lookupGlobal_maybe hscEnv name
+      pure $ case mbThing of
+        Succeeded (GHC.AnId anchorId) -> Just anchorId
+        _ -> Nothing
+    _ -> pure Nothing
+  case mbAnchorId of
+    Nothing -> pure env
+    Just anchorId ->
+      let binds = GHC.tcg_binds env
+          bindsAnchored =
+            Compat.modifyBinds
+              (transformBi (stripGuardAnchors anchorId) . transformBi (anchorExpr anchorId))
+              binds
+       in pure env {GHC.tcg_binds = bindsAnchored}
 
 -- | Wrap an @HsExpr@ with @anchor@.
 anchorExpr :: GHC.Id -> GHC.LHsExpr GHC.GhcTc -> GHC.LHsExpr GHC.GhcTc
