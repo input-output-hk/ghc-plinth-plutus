@@ -8,9 +8,13 @@
 
 module PlutusTx.Plugin.Utils where
 
+import Data.ByteString qualified as BS
+import Data.Foldable (fold)
 import GHC.TypeLits
+import PlutusCore.Flat (unflat)
 import PlutusTx.Code
 import PlutusTx.Utils
+import Prelude (Maybe (Just), ($), (.))
 
 {- Note [plc and Proxy]
 It would be nice to use TypeApplications instead of passing a Proxy to plc.
@@ -40,3 +44,16 @@ as unsupported by Plinth. -}
 unsupported :: forall (err :: Symbol) (loc :: Symbol) a. a -> a
 unsupported x = x
 {-# OPAQUE unsupported #-}
+
+-- Note [mkCompiledCode lives in plutus-tx]
+-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+-- The plugin (in plutus-tx-plugin, built into uplc-ghc) replaces a 'plinthc'
+-- marker with a call to 'mkCompiledCode', resolved by TH name. With the
+-- compiler baked into uplc-ghc, consumer projects depend on plutus-tx but not
+-- on plutus-tx-plugin. So 'mkCompiledCode' must live in plutus-tx for the
+-- unit-agnostic name resolution to find a module that exposes it in the
+-- consumer's package set. See Note [Unit-id-agnostic name resolution] in
+-- plutus-tx-plugin:PlutusTx.Plugin.Common.
+mkCompiledCode :: forall a. BS.ByteString -> BS.ByteString -> BS.ByteString -> CompiledCode a
+mkCompiledCode plcBS pirBS ci = SerializedCode plcBS (Just pirBS) (fold . unflat $ ci)
+{-# OPAQUE mkCompiledCode #-}
