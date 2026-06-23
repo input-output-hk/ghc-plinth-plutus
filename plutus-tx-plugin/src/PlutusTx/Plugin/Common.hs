@@ -17,7 +17,7 @@ import Certifier (CertifierOutput (..), mkCertifier, prettyCertifierError, runCe
 import PlutusCore qualified as PLC
 import PlutusCore.Compiler qualified as PLC
 import PlutusCore.Default (DefaultFun, DefaultUni)
-import PlutusCore.Flat (Flat, flat, unflat)
+import PlutusCore.Flat (Flat, flat)
 import PlutusCore.Pretty as PLC
 import PlutusCore.Quote
 import PlutusCore.Version qualified as PLC
@@ -679,7 +679,7 @@ compileMarkedExpr _locStr codeTy origE = do
   bsPlc <- makeByteStringLiteral $ flat (UPLC.UnrestrictedProgram uplcP)
   covIdxFlat <- makeByteStringLiteral $ flat covIdx
 
-  builder <- lift . lift . GHC.lookupId =<< thNameToGhcNameOrFail 'mkCompiledCode
+  builder <- lift . lift . GHC.lookupId =<< thNameToGhcNameOrFail 'PlutusTx.Plugin.Utils.mkCompiledCode
 
   -- inject the three bytestrings back as Haskell code.
   pure $
@@ -1042,10 +1042,6 @@ stripCoreAnchors marker = \case
   GHC.App (GHC.App (GHC.App (GHC.Var f) _locTy) _codeTy) code
     | GHC.getName f == marker -> stripCoreAnchors marker code
   other -> other
-
--- | Helper to avoid doing too much construction of Core ourselves
-mkCompiledCode :: forall a. BS.ByteString -> BS.ByteString -> BS.ByteString -> CompiledCode a
-mkCompiledCode plcBS pirBS ci = SerializedCode plcBS (Just pirBS) (fold . unflat $ ci)
 
 {-| Make a 'NameInfo' mapping the given set of TH names to their
 'GHC.TyThing's for later reference. -}
