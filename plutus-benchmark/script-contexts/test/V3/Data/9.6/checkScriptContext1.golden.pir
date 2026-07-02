@@ -7,6 +7,10 @@
             [(\(ds : data) (eta : list data) -> addInteger 1 (go eta)), 0]
   in
   let
+    data Unit | Unit_match where
+      Unit : Unit
+    data (Solo :: * -> *) a | Solo_match where
+      MkSolo : a -> Solo a
     data (Maybe :: * -> *) a | Maybe_match where
       Just : a -> Maybe a
       Nothing : Maybe a
@@ -29,10 +33,6 @@
                         Just {a} (`$dUnsafeFromData` (headList {data} ds)))
                    , (\(ds : list data) -> Nothing {a}) ]
                    args)
-    data Unit | Unit_match where
-      Unit : Unit
-    data (Solo :: * -> *) a | Solo_match where
-      MkSolo : a -> Solo a
   in
   \(d : data) ->
     Solo_match
