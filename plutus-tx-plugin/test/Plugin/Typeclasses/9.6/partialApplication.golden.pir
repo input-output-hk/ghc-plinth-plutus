@@ -6,13 +6,13 @@ let
   !equalsInteger : integer -> integer -> bool = equalsInteger
   !lessThanEqualsInteger : integer -> integer -> bool = lessThanEqualsInteger
   ~`$fOrdInteger_$ccompare` : integer -> integer -> Ordering
-    = \(eta : integer) ->
+    = \(x : integer) ->
         let
-          !x : integer = eta
+          !x : integer = x
         in
-        \(eta : integer) ->
+        \(y : integer) ->
           let
-            !y : integer = eta
+            !y : integer = y
           in
           case
             (all dead. Ordering)
