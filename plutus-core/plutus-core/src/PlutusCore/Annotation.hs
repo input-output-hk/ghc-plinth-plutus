@@ -146,7 +146,7 @@ data SrcSpan = SrcSpan
 
 instance Show SrcSpan where
   showsPrec _ s =
-    showString (srcSpanFile s)
+    showString (normalizeSrcSpanPath (srcSpanFile s))
       . showChar ':'
       . showsPrec 0 (srcSpanSLine s)
       . showChar ':'
@@ -158,6 +158,15 @@ instance Show SrcSpan where
 
 instance Pretty SrcSpan where
   pretty = viaShow
+
+-- Note [Normalizing SrcSpan paths]
+-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+-- SrcSpan file paths come from GHC, which uses the OS-native path separator:
+-- '/' on Unix, '\' on Windows. Since SrcSpans are rendered into golden test
+-- outputs (e.g. CallTrace) and other user-facing traces, we normalize the
+-- separator to '/' when displaying so that output is platform-independent.
+normalizeSrcSpanPath :: FilePath -> FilePath
+normalizeSrcSpanPath = map (\c -> if c == '\\' then '/' else c)
 
 newtype SrcSpans = SrcSpans {unSrcSpans :: Set SrcSpan}
   deriving newtype (Eq, Ord, Hashable, Semigroup, Monoid, MonoFoldable, NFData)
