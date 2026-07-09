@@ -5,4 +5,8 @@
 notes/**/*.html linguist-documentation
 doc/* linguist-documentation
 # don't do any newline conversion (taken from tasty-golden/silver hackage advice)
+# covers both plain *.golden files and the *.golden.<type> family
+# (*.golden.eval, *.golden.uplc, *.golden.pir, ...), which otherwise get
+# CRLF-converted on Windows checkout and mismatch the LF test output.
 *.golden	-text
+*.golden.*	-text
