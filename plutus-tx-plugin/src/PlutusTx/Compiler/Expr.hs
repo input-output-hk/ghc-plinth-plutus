@@ -1535,12 +1535,20 @@ getSourceSpan _ _ = Nothing
 getVarSourceSpan :: GHC.Var -> Maybe GHC.RealSrcSpan
 getVarSourceSpan = GHC.srcSpanToRealSrcSpan . GHC.nameSrcSpan . GHC.varName
 
+-- | The name of the file a 'GHC.RealSrcSpan' points to, with path separators
+-- normalized to '/'.
+--
+-- GHC reports backslashes on Windows. Normalizing here makes source locations
+-- (and any golden output derived from them) platform-independent.
+srcSpanNormFile :: GHC.RealSrcSpan -> String
+srcSpanNormFile = map (\c -> if c == '\\' then '/' else c) . GHC.unpackFS . GHC.srcSpanFile
+
 srcSpanIso :: Iso' GHC.RealSrcSpan SrcSpan
 srcSpanIso = iso fromGHC toGHC
   where
     fromGHC sp =
       SrcSpan
-        { srcSpanFile = GHC.unpackFS (GHC.srcSpanFile sp)
+        { srcSpanFile = srcSpanNormFile sp
         , srcSpanSLine = GHC.srcSpanStartLine sp
         , srcSpanSCol = GHC.srcSpanStartCol sp
         , srcSpanELine = GHC.srcSpanEndLine sp
@@ -1556,7 +1564,7 @@ srcSpanIso = iso fromGHC toGHC
 toCovLoc :: GHC.RealSrcSpan -> CovLoc
 toCovLoc sp =
   CovLoc
-    (GHC.unpackFS $ GHC.srcSpanFile sp)
+    (srcSpanNormFile sp)
     (GHC.srcSpanStartLine sp)
     (GHC.srcSpanEndLine sp)
     (GHC.srcSpanStartCol sp)
