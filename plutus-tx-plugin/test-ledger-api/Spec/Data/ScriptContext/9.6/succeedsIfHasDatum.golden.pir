@@ -54,10 +54,9 @@ in
                      [ (\(ds : list data) -> Just {data} (headList {data} ds))
                      , (\(ds : list data) -> Nothing {data}) ]
                      args))
-             {all dead. bool}
-             (\(ds : data) -> /\dead -> True)
-             (/\dead -> False)
-             {all dead. dead}) ]
+             {bool}
+             (\(ds : data) -> True)
+             False) ]
       {all dead. dead})
     [ (/\dead -> let !x : Unit = trace {Unit} "PT5" Unit in error {unit})
     , (/\dead -> ()) ]
