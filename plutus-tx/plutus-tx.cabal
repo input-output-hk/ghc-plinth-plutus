@@ -209,7 +209,7 @@ library plutus-tx-testlib
 test-suite plutus-tx-test
   import:         lang
 
-  if (impl(ghcjs) || os(windows))
+  if impl(ghcjs)
     buildable: False
 
   type:           exitcode-stdio-1.0
