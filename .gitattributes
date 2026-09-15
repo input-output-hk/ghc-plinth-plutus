@@ -10,3 +10,6 @@ doc/* linguist-documentation
 # CRLF-converted on Windows checkout and mismatch the LF test output.
 *.golden	-text
 *.golden.*	-text
+# some goldens are addressed by a golden/ directory instead of a .golden
+# extension (e.g. plutus-tx-plugin/test-ledger-api/golden/envelope.json)
+**/golden/**	-text
