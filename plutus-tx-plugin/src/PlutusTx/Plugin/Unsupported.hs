@@ -97,6 +97,42 @@ unsupportedMarkerModule, unsupportedMarkerName :: String
 unsupportedMarkerModule = fromJust $ TH.nameModule 'PlutusTx.Plugin.Utils.unsupported
 unsupportedMarkerName = TH.nameBase 'PlutusTx.Plugin.Utils.unsupported
 
+{- Note [Do not wrap the compiler markers]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The types of the compiler markers mention the user's code type. For
+example, in
+
+  code :: CompiledCode (IO ())
+  code = $$(PlutusTx.compile [|| ... ||])
+
+the splice applies 'plinthc' at type 'IO () -> CompiledCode (IO ())',
+so the IO check matches the 'plinthc' occurrence itself. Wrapping it
+in 'unsupported' hides the marker from the plugin pass, which then
+fails with "Found invalid marker" instead of the real error. The same
+holds for 'anchor' applications injected before this pass. So an
+expression whose head is one of the markers is never wrapped; the
+offending sub-expression still gets its own wrap. -}
+
+-- | The markers that must never be wrapped in 'unsupported'.
+protectedMarkerNames :: [String]
+protectedMarkerNames =
+  TH.nameBase
+    <$> [ 'PlutusTx.Plugin.Utils.plinthc
+        , 'PlutusTx.Plugin.Utils.anchor
+        , 'PlutusTx.Plugin.Utils.unsupported
+        , 'PlutusTx.Plugin.Utils.mkCompiledCode
+        ]
+
+-- | The head variable of an application chain, if any.
+exprHeadName :: GHC.HsExpr GHC.GhcTc -> Maybe GHC.Name
+exprHeadName = \case
+  GHC.HsVar _ (GHC.L _ v) -> Just (GHC.getName v)
+  GHC.HsApp _ (GHC.L _ f) _ -> exprHeadName f
+  Compat.HsAppType _ (GHC.L _ f) _ -> exprHeadName f
+  GHC.XExpr (Compat.WrapExpr e) -> exprHeadName e
+  Compat.HsPar (GHC.L _ e) -> exprHeadName e
+  _ -> Nothing
+
 injectUnsupportedMarkers :: GHC.TcGblEnv -> GHC.TcM GHC.TcGblEnv
 injectUnsupportedMarkers env = do
   hscEnv <- GHC.getTopEnv
@@ -112,10 +148,11 @@ injectUnsupportedMarkers env = do
       name <- GHC.lookupOrig m (GHC.mkVarOcc unsupportedMarkerName)
       mbThing <- liftIO $ GHC.lookupGlobal_maybe hscEnv name
       case mbThing of
-        Succeeded (GHC.AnId unsupportedId) ->
+        Succeeded (GHC.AnId unsupportedId) -> do
+          markers <- traverse (GHC.lookupOrig m . GHC.mkVarOcc) protectedMarkerNames
           let binds = GHC.tcg_binds env
-              binds' = Compat.modifyBinds (transformBi (wrapUnsupported unsupportedId)) binds
-           in pure env {GHC.tcg_binds = binds'}
+              binds' = Compat.modifyBinds (transformBi (wrapUnsupported markers unsupportedId)) binds
+          pure env {GHC.tcg_binds = binds'}
         _ -> pure env
     _ -> pure env
 
@@ -147,8 +184,12 @@ loaded plugin would only ever run on modules that requested it via -fplugin,
 where the marker is always reachable.
 -}
 
-wrapUnsupported :: GHC.Id -> GHC.LHsExpr GHC.GhcTc -> GHC.LHsExpr GHC.GhcTc
-wrapUnsupported unsupportedId le@(GHC.L ann e)
+wrapUnsupported :: [GHC.Name] -> GHC.Id -> GHC.LHsExpr GHC.GhcTc -> GHC.LHsExpr GHC.GhcTc
+wrapUnsupported markers unsupportedId le@(GHC.L ann e)
+  -- See Note [Do not wrap the compiler markers]
+  | Just h <- exprHeadName e
+  , h `elem` markers =
+      le
   | Just unsupported <- isUnsupported e
   , Just sp <- GHC.srcSpanToRealSrcSpan (GHC.locA ann) =
       let msgTy = GHC.LitTy . GHC.StrTyLit . GHC.mkFastString $ renderUnsupported unsupported
