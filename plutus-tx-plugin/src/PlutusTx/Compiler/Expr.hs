@@ -20,6 +20,7 @@ module PlutusTx.Compiler.Expr
   , compileExprWithDefs
   , compileDataConRef
   , encodeSrcSpan
+  , getVarSourceSpan
   ) where
 
 import GHC.Builtin.Names qualified as GHC
@@ -905,6 +906,45 @@ traceExprMsg = \case
   Nothing -> "Compiling code:"
   Just loc -> "Compiling code at" GHC.<+> GHC.ppr loc GHC.<> ":"
 
+-- Note [Markers hidden from error output]
+-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+-- The 'anchor' and 'unsupported' markers carry source locations as
+-- type-level strings with NUL separators. They are internal plumbing:
+-- shown in an error context they only add noise. So the Core shown in
+-- "Context:" frames is first stripped of marker applications:
+--
+--   anchor @"F.hs\NUL1\NUL2\NUL3\NUL4" @Integer x   -->   x
+--
+-- This only changes what is displayed; the compiled Core is untouched.
+
+-- | Remove marker applications from a Core expression, for display in
+-- error contexts. See Note [Markers hidden from error output].
+stripMarkersForDisplay :: [GHC.Name] -> GHC.CoreExpr -> GHC.CoreExpr
+stripMarkersForDisplay markers = go
+  where
+    go expr
+      | Just inner <- marker_arg expr = go inner
+      | otherwise = case expr of
+          GHC.App f a -> GHC.App (go f) (go a)
+          GHC.Lam b e -> GHC.Lam b (go e)
+          GHC.Let bnd e -> GHC.Let (go_bind bnd) (go e)
+          GHC.Case e b t alts ->
+            GHC.Case (go e) b t [GHC.Alt c bs (go rhs) | GHC.Alt c bs rhs <- alts]
+          GHC.Cast e c -> GHC.Cast (go e) c
+          GHC.Tick t e -> GHC.Tick t (go e)
+          e -> e
+    go_bind = \case
+      GHC.NonRec b rhs -> GHC.NonRec b (go rhs)
+      GHC.Rec bs -> GHC.Rec (fmap (fmap go) bs)
+    -- A marker is fully applied to type arguments plus one value
+    -- argument; return that argument.
+    marker_arg expr = case GHC.collectArgs expr of
+      (GHC.Var v, args)
+        | GHC.getName v `elem` markers
+        , [arg] <- filter GHC.isValArg args ->
+            Just arg
+      _ -> Nothing
+
 compileExpr
   :: CompilingDefault uni fun m ann => Maybe GHC.RealSrcSpan -> GHC.CoreExpr -> m (PIRTerm uni fun)
 compileExpr mloc e = do
@@ -1063,8 +1103,11 @@ compileExpr mloc e = do
               ]
               (PIR.apply annMayInline selectedBranch fields)
 
+  -- See Note [Markers hidden from error output]
+  let display_e = stripMarkersForDisplay [anchorName, unsupportedName] e
+
   case extractUnsupported unsupportedName e of
-    Just (msg, sp) -> traceCompilationL 2 (traceExprMsg (Just sp) GHC.$$ GHC.ppr e) (Just sp) $ do
+    Just (msg, sp) -> traceCompilationL 2 (traceExprMsg (Just sp) GHC.$$ GHC.ppr display_e) (Just sp) $ do
       throwPlain . UnsupportedError $ T.pack msg
     Nothing -> pure ()
 
@@ -1078,7 +1121,7 @@ compileExpr mloc e = do
         (coverageCompile e' (GHC.exprType e') loc)
         (addSrcSpan (loc ^. srcSpanIso) <$> res)
         anns
-    _ -> traceCompilationL 2 (traceExprMsg mloc GHC.$$ GHC.ppr e) mloc $ do
+    _ -> traceCompilationL 2 (traceExprMsg mloc GHC.$$ GHC.ppr display_e) mloc $ do
       case e of
         -- caseInteger: dispatch on an integer index to select a branch.
         GHC.App (GHC.App (GHC.App (GHC.Var var) (GHC.Type resTy)) scrut) li
