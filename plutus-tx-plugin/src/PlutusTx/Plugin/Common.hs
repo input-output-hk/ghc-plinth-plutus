@@ -52,6 +52,12 @@ import UntypedPlutusCore qualified as UPLC
 
 import GHC.ByteCode.Types qualified as GHC
 import GHC.Core.Coercion.Opt qualified as GHC
+import GHC.Data.Strict qualified as Strict
+import GHC.Driver.Errors.Types qualified as GHC
+import GHC.Types.Error qualified as GHC
+import GHC.Types.Hint qualified as GHC
+import GHC.Types.SourceError qualified as GHC
+import GHC.Utils.Error qualified as GHC
 import GHC.Core.FamInstEnv qualified as GHC
 import GHC.Core.Opt.Arity qualified as GHC
 import GHC.Core.Opt.OccurAnal qualified as GHC
@@ -79,7 +85,7 @@ import GHC.Iface.Env (lookupNameCache)
 import GHC.ThToHs (thRdrNameGuesses)
 import GHC.Unit.State (lookupModuleInAllUnits)
 
-import Control.Exception (SomeException, throwIO, try)
+import Control.Exception (throwIO)
 import Control.Lens
 import Control.Monad
 import Control.Monad.Except
@@ -91,7 +97,7 @@ import Data.ByteString.Unsafe qualified as BSUnsafe
 import Data.Either.Validation
 import Data.Generics.Uniplate.Data
 import Data.Map qualified as Map
-import Data.Maybe (catMaybes, fromJust, listToMaybe, mapMaybe, maybeToList)
+import Data.Maybe (catMaybes, fromJust, listToMaybe, mapMaybe)
 import GHC.Data.Maybe (MaybeErr (..))
 import Data.Monoid.Extra (mwhen)
 import Data.Set qualified as Set
@@ -191,20 +197,33 @@ injectAnchors env = do
         Succeeded (GHC.AnId anchorId) -> Just anchorId
         _ -> Nothing
     _ -> pure Nothing
-  case mbAnchorId of
-    Nothing -> pure env
-    Just anchorId ->
+  case (findResult, mbAnchorId) of
+    (GHC.Found _ m, Just anchorId) -> do
+      -- The other markers must not be anchored: an anchor around them
+      -- would hide them from the plugin pass. Compare
+      -- Note [Do not wrap the compiler markers] in PlutusTx.Plugin.Unsupported.
+      skips <- traverse (GHC.lookupOrig m . GHC.mkVarOcc) anchorSkipNames
       let binds = GHC.tcg_binds env
           bindsAnchored =
             Compat.modifyBinds
-              (transformBi (stripGuardAnchors anchorId) . transformBi (anchorExpr anchorId))
+              (transformBi (stripGuardAnchors anchorId) . transformBi (anchorExpr anchorId skips))
               binds
-       in pure env {GHC.tcg_binds = bindsAnchored}
+      pure env {GHC.tcg_binds = bindsAnchored}
+    _ -> pure env
+
+-- | Occurrence names of the markers that must never be anchored.
+anchorSkipNames :: [String]
+anchorSkipNames =
+  TH.nameBase
+    <$> [ 'PlutusTx.Plugin.Utils.plinthc
+        , 'PlutusTx.Plugin.Utils.unsupported
+        , 'PlutusTx.Plugin.Utils.mkCompiledCode
+        ]
 
 -- | Wrap an @HsExpr@ with @anchor@.
-anchorExpr :: GHC.Id -> GHC.LHsExpr GHC.GhcTc -> GHC.LHsExpr GHC.GhcTc
-anchorExpr anchorId le@(GHC.L ann e)
-  | isAnchorWorthy anchorId e
+anchorExpr :: GHC.Id -> [GHC.Name] -> GHC.LHsExpr GHC.GhcTc -> GHC.LHsExpr GHC.GhcTc
+anchorExpr anchorId skips le@(GHC.L ann e)
+  | isAnchorWorthy anchorId skips e
   , Just !sp <- GHC.srcSpanToRealSrcSpan (GHC.locA ann) =
       let locStr = encodeSrcSpan sp
           locTy = GHC.LitTy (GHC.StrTyLit (GHC.mkFastString locStr))
@@ -214,22 +233,35 @@ anchorExpr anchorId le@(GHC.L ann e)
        in GHC.noLocA (Compat.hsAppTc (GHC.noLocA anchor) le)
   | otherwise = le
 
-isAnchorWorthy :: GHC.Id -> GHC.HsExpr GHC.GhcTc -> Bool
-isAnchorWorthy marker expr
+isAnchorWorthy :: GHC.Id -> [GHC.Name] -> GHC.HsExpr GHC.GhcTc -> Bool
+isAnchorWorthy marker skips expr
   -- This should never happen since we add anchors bottom-up, but just in case.
   | isAnchorApp marker expr = False
   -- @anchor@ only works on lifted types
   | GHC.mightBeUnliftedType (GHC.hsExprType expr) = False
-  | otherwise = case expr of
-      -- We currently only wrap variables with @anchor@. Wrapping more
-      -- expressions leads to significantly less optimized GHC Core, because
-      -- GHC is unable to optimize it effectively.
-      --
-      -- However, this should be exactly what we want! Ideally we'd avoid any GHC
-      -- optimizations since they don't necessarily preserve Plinth semantics. All
-      -- optimization should instead be performed by the PIR/UPLC optimizers. This
-      -- suggests there's still significant room for improvement in the PIR/UPLC optimizers.
-      GHC.HsVar {} -> True
+  | otherwise = worthy expr
+  where
+    -- We only wrap variables (bare or under a wrapper) and literals
+    -- with @anchor@. Wrapping more expression forms leads to
+    -- significantly less optimized GHC Core, because GHC is unable to
+    -- optimize it effectively.
+    --
+    -- However, this should be exactly what we want! Ideally we'd avoid any GHC
+    -- optimizations since they don't necessarily preserve Plinth semantics. All
+    -- optimization should instead be performed by the PIR/UPLC optimizers. This
+    -- suggests there's still significant room for improvement in the PIR/UPLC optimizers.
+    --
+    -- A wrapped variable is an occurrence with a type or dictionary
+    -- application (e.g. a class method such as 'show'). The anchor
+    -- goes outside the wrapper, so the class-op rules still fire on
+    -- the argument of the anchor. Literals matter for errors: an
+    -- unsupported literal (Double, Char, ...) anchored here keeps its
+    -- source location in the error message.
+    worthy = \case
+      GHC.HsVar _ (GHC.L _ v) -> GHC.getName v `notElem` skips
+      GHC.XExpr (Compat.WrapExpr e) -> worthy e
+      GHC.HsLit {} -> True
+      GHC.HsOverLit {} -> True
       _ -> False
 
 isTick :: GHC.HsExpr GHC.GhcTc -> Bool
@@ -431,71 +463,52 @@ runPluginM pctx act = do
           err' :: CompileError uni fun Ann
           err' = foldl' (\e (p, c) -> WithContextC p c e) (NoContext (fst errStack)) (fst truncated)
 
-      snippet <- case snd truncated of
-        Nothing -> pure Nothing
-        Just ss -> getSourceSnippet ss
-
       let msg =
-            PP.vsep $
+            PP.vsep
               [ "Plinth Compilation Error:"
               , PP.pretty (mapContext fst err')
               ]
-                ++ maybeToList snippet
-          errInGhc = GHC.ProgramError . show $ msg
-      GHC.throwGhcExceptionIO errInGhc
 
-getSourceSnippet :: GHC.RealSrcSpan -> IO (Maybe (PP.Doc ann))
-getSourceSnippet ss = do
-  let file = GHC.unpackFS (GHC.srcSpanFile ss)
-      sLine = GHC.srcSpanStartLine ss
-      sCol = GHC.srcSpanStartCol ss
-      eLine = GHC.srcSpanEndLine ss
-      eCol = GHC.srcSpanEndCol ss
-  result <- try @SomeException (readFile file)
-  pure $ case result of
-    Left _ -> Nothing
-    Right (lines -> ls)
-      | sLine >= 1 Prelude.&& sLine <= length ls ->
-          let l = ls !! (sLine - 1)
-              endCol = if eLine == sLine then eCol else length l + 1
-           in Just (formatSourceSnippet sLine sCol endCol l)
-      | otherwise -> Nothing
-
-formatSourceSnippet :: Int -> Int -> Int -> String -> PP.Doc ann
-formatSourceSnippet lineNum startCol0 endCol0 l0 = PP.vsep [preCode, numberedLine, postCode]
-  where
-    (l, reduced) = reduceIndent l0
-    startCol = startCol0 - reduced
-    endCol = endCol0 - reduced
-    k = length (show lineNum)
-    preCode = PP.pretty (replicate k ' ') <> PP.pretty @String " |ᴾᴸᴵᴺᵀᴴ"
-    numberedLine = PP.pretty lineNum <> PP.pretty @String " | " <> PP.pretty l
-    carets = replicate (max 1 (endCol - startCol)) '^'
-    postCode =
-      PP.pretty (replicate k ' ')
-        <> PP.pretty @String " | "
-        <> PP.pretty (replicate (startCol - 1) ' ')
-        <> red (PP.pretty carets)
-    reduceIndent :: String -> (String, Int)
-    reduceIndent s
-      | ind >= 5 = (replicate 5 ' ' ++ rest, ind - 5)
-      | otherwise = (s, 0)
-      where
-        (spaces, rest) = span (== ' ') s
-        ind = length spaces
-    red :: PP.Doc ann -> PP.Doc ann
-    red doc = PP.pretty ("\ESC[32m" :: String) <> doc <> PP.pretty ("\ESC[0m" :: String)
+      -- Throw a GHC diagnostic located at the innermost source span the
+      -- error carries (or at the failing definition, see
+      -- 'withDefinitionContext'). A located diagnostic gives the error a
+      -- proper "File.hs:l:c: error:" header, which editors and build
+      -- tools can parse, and GHC renders the source snippet with the
+      -- caret itself; the previous 'ProgramError' bypassed the GHC
+      -- diagnostic pipeline and printed "<no location info>".
+      let srcSpan = case snd truncated of
+            Just ss -> GHC.RealSrcSpan ss Strict.Nothing
+            Nothing -> GHC.noSrcSpan
+          doc = GHC.vcat (GHC.text <$> lines (show msg))
+      GHC.throwOneError
+        . GHC.mkPlainErrorMsgEnvelope srcSpan
+        . GHC.ghcUnknownMessage
+        $ GHC.mkPlainError GHC.noHints doc
 
 -- | Compiles all the marked expressions in the given binder into PLC literals.
 compileBind :: GHC.CoreBind -> PluginM PLC.DefaultUni PLC.DefaultFun GHC.CoreBind
 compileBind = \case
-  GHC.NonRec b rhs -> GHC.NonRec b <$> compileMarkedExprs rhs
+  GHC.NonRec b rhs -> GHC.NonRec b <$> withDefinitionContext b (compileMarkedExprs rhs)
   GHC.Rec bindsRhses ->
     GHC.Rec
       <$> ( for bindsRhses $ \(b, rhs) -> do
-              rhs' <- compileMarkedExprs rhs
+              rhs' <- withDefinitionContext b (compileMarkedExprs rhs)
               pure (b, rhs')
           )
+
+{-| Add an error context frame that names the definition under
+compilation and carries the source location of its binder. Many errors
+have no more precise location; this frame is then the fall-back that
+gives the error message a source location. The priority (5) keeps the
+frame out of the deferred-error output at the default context-level. -}
+withDefinitionContext :: GHC.Var -> PluginM uni fun a -> PluginM uni fun a
+withDefinitionContext b act = do
+  flags <- GHC.getDynFlags
+  let mloc = getVarSourceSpan b
+      sd = case mloc of
+        Nothing -> "Compiling definition:" GHC.<+> GHC.ppr b
+        Just loc -> "Compiling definition at" GHC.<+> GHC.ppr loc GHC.<> ":" GHC.<+> GHC.ppr b
+  withContextM 5 (pure (Text.pack (GHC.showSDoc flags sd), mloc)) act
 
 {- Note [Hooking in the plugin]
 Working out what to process and where to put it is tricky. We are going to turn the result in
