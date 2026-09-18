@@ -231,11 +231,21 @@ compileTyCon tc
               -- to compile unboxed tuples type constructor, see Note [Runtime reps]
               withTyVarsScoped (dropRuntimeRepVars $ GHC.tyConTyVars tc) $ \tvs -> do
                 constructors <- for dcs $ \dc -> do
+                  -- An existential type variable has no PIR encoding;
+                  -- report it here, before its out-of-scope use fails
+                  -- with a confusing free-variable error.
+                  unless (null (GHC.dataConExTyCoVars dc)) $
+                    throwSd UnsupportedError $
+                      "Existential quantification in data constructor"
+                        GHC.<+> GHC.ppr dc
                   name <- compileNameFresh (GHC.getName dc)
                   ty <- mkConstructorType dc
-                  pure $ PIR.VarDecl annMayInline name ty
+                  -- The names' source spans make PIR-level errors
+                  -- about this datatype point at its declaration.
+                  pure $ PIR.VarDecl (annForName $ GHC.getName dc) name ty
 
-                let datatype = PIR.Datatype annMayInline tvd tvs matchName constructors
+                let datatype =
+                      PIR.Datatype (annForName $ GHC.getName tc) tvd tvs matchName constructors
 
                 PIR.modifyDatatypeDef @_ @uni lexName (const $ PIR.Def tvd datatype)
               pure $ PIR.mkTyVar tvd

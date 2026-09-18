@@ -8,6 +8,7 @@ module PlutusTx.Compiler.Names where
 import PlutusTx.Compiler.Kind
 import {-# SOURCE #-} PlutusTx.Compiler.Type
 import PlutusTx.Compiler.Types
+import PlutusTx.Compiler.Utils (annForName)
 import PlutusTx.PIRTypes
 import PlutusTx.PLCTypes
 
@@ -84,7 +85,9 @@ compileTcTyVarFresh :: Compiling uni fun m ann => GHC.TyCon -> m PLCTyVar
 compileTcTyVarFresh tc = do
   k' <- compileKind $ GHC.tyConKind tc
   t' <- compileTyNameFresh $ GHC.getName tc
-  pure $ PLC.TyVarDecl annMayInline t' (k' $> annMayInline)
+  -- The name's source span makes PIR-level errors about this
+  -- datatype point at its declaration.
+  pure $ PLC.TyVarDecl (annForName $ GHC.getName tc) t' (k' $> annMayInline)
 
 pushName :: GHC.Name -> PLCVar uni -> Maybe (PIRTerm uni fun) -> Scope uni fun -> Scope uni fun
 pushName ghcName n def (Scope ns tyns) = Scope (Map.insert ghcName (n, def) ns) tyns

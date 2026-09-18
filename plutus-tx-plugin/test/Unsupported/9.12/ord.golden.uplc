@@ -1,1 +1,1 @@
-Error: Unsupported feature: GHC.Classes.Ord.>, use PlutusTx.Ord.Class.Ord
+Error: Unsupported feature: GHC.Classes.Ord.>, use PlutusTx.Ord.Ord

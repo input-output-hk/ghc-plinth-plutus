@@ -1,1 +1,1 @@
-Error: Unsupported feature: GHC.Classes.Eq.==, use PlutusTx.Eq.Class.Eq
+Error: Unsupported feature: GHC.Classes.Eq.==, use PlutusTx.Eq.Eq
