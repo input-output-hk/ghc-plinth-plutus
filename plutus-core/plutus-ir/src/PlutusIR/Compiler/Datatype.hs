@@ -629,6 +629,12 @@ compileRecDatatypes
   -> m (PIRTerm uni fun a)
 compileRecDatatypes body ds = case ds of
   d NE.:| [] -> compileDatatype Rec body d
-  _ -> do
-    p <- getEnclosing
-    throwError $ UnsupportedError p "Mutually recursive datatypes"
+  _ ->
+    -- The error names the datatypes and carries the annotation of the
+    -- first one, which holds its source location when the producer
+    -- (e.g. the Plinth plugin) recorded one.
+    let dt_name (Datatype _ tn _ _ _) = _nameText . unTyName $ _tyVarDeclName tn
+        dt_ann (Datatype a _ _ _ _) = a
+        names = T.intercalate ", " . NE.toList $ fmap dt_name ds
+     in throwError . UnsupportedError (dt_ann (NE.head ds)) $
+          "Mutually recursive datatypes: " <> names
