@@ -73,7 +73,9 @@ data Inline
   deriving anyclass (Hashable)
 
 instance Pretty Ann where
-  pretty = viaShow
+  -- Only the source spans help a user reading an error message; the
+  -- other fields are compiler-internal.
+  pretty = pretty . annSrcSpans
 
 class AnnInline a where
   -- | An annotation instructing the inliner to always inline a binding.
