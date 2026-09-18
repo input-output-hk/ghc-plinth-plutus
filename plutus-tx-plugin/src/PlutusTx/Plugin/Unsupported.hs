@@ -7,8 +7,6 @@ module PlutusTx.Plugin.Unsupported where
 import PlutusTx.Compiler.Compat qualified as Compat
 import PlutusTx.Compiler.Expr
 import PlutusTx.Compiler.Type (splitGhcName)
-import PlutusTx.Eq qualified
-import PlutusTx.Ord qualified
 import PlutusTx.Plugin.Utils qualified
 
 import GHC.Builtin.Names qualified as GHC
@@ -35,10 +33,14 @@ import Language.Haskell.TH qualified as TH
 type Module = String
 type Class = String
 type Method = String
+type Function = String
 type UseThisInstead = Maybe String
 
 data Unsupported
   = BaseMethod Class Method UseThisInstead
+  | BaseFunction Function UseThisInstead
+  | -- | The Bool tells if the range is bounded ([a .. b]) or not ([a ..]).
+    RangeSyntax Bool
   | IO
 
 renderUnsupported :: Unsupported -> String
@@ -46,16 +48,36 @@ renderUnsupported = \case
   BaseMethod cls method malt ->
     (cls <> "." <> method)
       <> case malt of Just alt -> ", use " <> alt; Nothing -> ""
+  BaseFunction fn malt ->
+    fn <> case malt of Just alt -> ", use " <> alt; Nothing -> ""
+  RangeSyntax True ->
+    "Range syntax, use PlutusTx.Enum.enumFromTo or PlutusTx.Enum.enumFromThenTo"
+  RangeSyntax False ->
+    "Unbounded range syntax: unbounded ranges are not supported"
   IO -> "IO actions are not supported in Plinth"
 
 isUnsupported :: GHC.HsExpr GHC.GhcTc -> Maybe Unsupported
 isUnsupported expr =
   asum
     [ checkUnsupportedMethod expr
+    , checkUnsupportedFunction expr
+    , checkRangeSyntax expr
     , checkIO ty
     ]
   where
     ty = GHC.hsExprType expr
+
+-- | Check if an expr uses range syntax ([a..b] and friends). It shows
+-- as an 'ArithSeq' node, not as an 'enumFromTo' method occurrence, so
+-- 'checkUnsupportedMethod' cannot catch it.
+checkRangeSyntax :: GHC.HsExpr GHC.GhcTc -> Maybe Unsupported
+checkRangeSyntax = \case
+  GHC.ArithSeq _ _ info -> Just . RangeSyntax $ case info of
+    GHC.From {} -> False
+    GHC.FromThen {} -> False
+    GHC.FromTo {} -> True
+    GHC.FromThenTo {} -> True
+  _ -> Nothing
 
 -- | Check if the type involves IO.
 checkIO :: GHC.Type -> Maybe Unsupported
@@ -77,21 +99,55 @@ checkUnsupportedMethod = \case
   GHC.XExpr (Compat.WrapExpr e) -> checkUnsupportedMethod e
   _ -> Nothing
 
+-- | Check if an expr is an unsupported @base@ function.
+checkUnsupportedFunction :: GHC.HsExpr GHC.GhcTc -> Maybe Unsupported
+checkUnsupportedFunction = \case
+  GHC.HsVar _ (GHC.L _ v)
+    | (Just modu, occ) <- splitGhcName (GHC.getName v)
+    , Just alt <- Map.lookup (modu, occ) unsupportedBaseFunctions ->
+        Just $ BaseFunction (modu <> "." <> occ) alt
+  GHC.XExpr (Compat.WrapExpr e) -> checkUnsupportedFunction e
+  _ -> Nothing
+
 renderGhcName :: GHC.Name -> String
 renderGhcName = GHC.showSDocUnsafe . GHC.pprName
 {-# INLINE renderGhcName #-}
 
+-- The suggestions are written out instead of derived with TH.pprint:
+-- the latter prints the class's defining module (PlutusTx.Eq.Class,
+-- PlutusTx.Show.TH, ...), not the module users import from.
 unsupportedBaseClasses :: Map (Module, Class) UseThisInstead
 unsupportedBaseClasses =
   Map.fromList
     . mapMaybe
       ( \(name, alt) -> do
           modu <- TH.nameModule name
-          pure ((modu, TH.nameBase name), TH.pprint <$> alt)
+          pure ((modu, TH.nameBase name), alt)
       )
-    $ [ (''Prelude.Eq, Just ''PlutusTx.Eq.Eq)
-      , (''Prelude.Ord, Just ''PlutusTx.Ord.Ord)
+    $ [ (''Prelude.Eq, Just "PlutusTx.Eq.Eq")
+      , (''Prelude.Ord, Just "PlutusTx.Ord.Ord")
+      , (''Prelude.Show, Just "PlutusTx.Show.Show")
+      , (''Prelude.Enum, Just "PlutusTx.Enum.Enum")
       ]
+
+{-| @base@ functions that can never work in Plinth, detected at the
+type-check stage so the error points at the use site. Only add
+functions that always fail to compile: the 'unsupported' wrap turns
+every compiled use into an error. -}
+unsupportedBaseFunctions :: Map (Module, Function) UseThisInstead
+unsupportedBaseFunctions =
+  Map.fromList
+    . mapMaybe
+      ( \(name, alt) -> do
+          modu <- TH.nameModule name
+          pure ((modu, TH.nameBase name), alt)
+      )
+    $ [ ('Prelude.error, plutusError)
+      , ('Prelude.errorWithoutStackTrace, plutusError)
+      , ('Prelude.undefined, plutusError)
+      ]
+  where
+    plutusError = Just "PlutusTx.Prelude.error or PlutusTx.Prelude.traceError"
 
 unsupportedMarkerModule, unsupportedMarkerName :: String
 unsupportedMarkerModule = fromJust $ TH.nameModule 'PlutusTx.Plugin.Utils.unsupported
