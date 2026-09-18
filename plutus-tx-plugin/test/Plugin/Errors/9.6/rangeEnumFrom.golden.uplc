@@ -1,1 +1,1 @@
-Error: Unsupported feature: Use of enumFrom or enumFromThen, possibly via range syntax. Unbounded ranges are not supported.
+Error: Unsupported feature: Unbounded range syntax: unbounded ranges are not supported

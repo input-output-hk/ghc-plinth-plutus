@@ -12,11 +12,13 @@ import PlutusTx.Compiler.Error
 import PlutusTx.Compiler.Types
 
 import PlutusCore qualified as PLC
+import PlutusCore.Annotation (Ann, SrcSpan (..), addSrcSpan, annMayInline)
 
 import GHC.Core qualified as GHC
 import GHC.Plugins qualified as GHC
 import GHC.Types.TyThing qualified as GHC
 
+import Control.Lens (Iso', iso, (^.))
 import Control.Monad ((<=<))
 import Control.Monad.Except
 import Control.Monad.Reader (MonadReader, ask)
@@ -60,10 +62,68 @@ lookupGhcId thName = do
     Just (GHC.AnId ghcId) -> pure ghcId
     _ -> throwPlain $ CompilationError $ "Id not found: " <> T.pack (show thName)
 
+-- Note [Suppressed Core annotations in error output]
+-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+-- Error messages and their "Context:" frames show GHC Core. Raw Core
+-- carries much noise a Plinth user cannot act on: occurrence info
+-- ("[Occ=Once1!]"), casts with their coercions, uniques ("x_a5yk";
+-- also platform-dependent), ticks. Rendering with the corresponding
+-- suppression flags keeps the output close to the user's code:
+--
+--   case x_a5yk [Occ=Once1] of ...   -->   case x of ...
+--
+-- Module prefixes stay: they tell a supported name from an
+-- unsupported one (e.g. GHC.Classes.== vs PlutusTx.Eq.==).
+
+getVarSourceSpan :: GHC.Var -> Maybe GHC.RealSrcSpan
+getVarSourceSpan = GHC.srcSpanToRealSrcSpan . GHC.nameSrcSpan . GHC.varName
+
+-- | The name of the file a 'GHC.RealSrcSpan' points to, with path separators
+-- normalized to '/'.
+--
+-- GHC reports backslashes on Windows. Normalizing here makes source locations
+-- (and any golden output derived from them) platform-independent.
+srcSpanNormFile :: GHC.RealSrcSpan -> String
+srcSpanNormFile = map (\c -> if c == '\\' then '/' else c) . GHC.unpackFS . GHC.srcSpanFile
+
+srcSpanIso :: Iso' GHC.RealSrcSpan SrcSpan
+srcSpanIso = iso fromGHC toGHC
+  where
+    fromGHC sp =
+      SrcSpan
+        { srcSpanFile = srcSpanNormFile sp
+        , srcSpanSLine = GHC.srcSpanStartLine sp
+        , srcSpanSCol = GHC.srcSpanStartCol sp
+        , srcSpanELine = GHC.srcSpanEndLine sp
+        , srcSpanECol = GHC.srcSpanEndCol sp
+        }
+    toGHC sp =
+      GHC.mkRealSrcSpan
+        (GHC.mkRealSrcLoc (fileNameFs sp) (srcSpanSLine sp) (srcSpanSCol sp))
+        (GHC.mkRealSrcLoc (fileNameFs sp) (srcSpanELine sp) (srcSpanECol sp))
+    fileNameFs = GHC.fsLit . srcSpanFile
+
+-- | An 'Ann' that carries the source span of the given name, when the
+-- name has one. Used to give PIR-level errors a source location.
+annForName :: GHC.Name -> Ann
+annForName n = case GHC.srcSpanToRealSrcSpan (GHC.nameSrcSpan n) of
+  Nothing -> annMayInline
+  Just sp -> addSrcSpan (sp ^. srcSpanIso) annMayInline
+
 sdToStr :: MonadReader (CompileContext uni fun) m => GHC.SDoc -> m String
 sdToStr sd = do
   CompileContext {ccFlags = flags} <- ask
-  pure $ GHC.showSDocForUser flags GHC.emptyUnitState GHC.alwaysQualify sd
+  -- See Note [Suppressed Core annotations in error output]
+  let flags' =
+        foldl
+          GHC.gopt_set
+          flags
+          [ GHC.Opt_SuppressIdInfo
+          , GHC.Opt_SuppressCoercions
+          , GHC.Opt_SuppressUniques
+          , GHC.Opt_SuppressTicks
+          ]
+  pure $ GHC.showSDocForUser flags' GHC.emptyUnitState GHC.alwaysQualify sd
 
 sdToTxt :: MonadReader (CompileContext uni fun) m => GHC.SDoc -> m T.Text
 sdToTxt = fmap T.pack . sdToStr

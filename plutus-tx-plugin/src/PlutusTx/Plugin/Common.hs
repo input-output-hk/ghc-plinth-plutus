@@ -6,6 +6,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskellQuotes #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE ViewPatterns #-}
 -- For some reason this module is very slow to compile otherwise
@@ -55,7 +56,6 @@ import GHC.Core.Coercion.Opt qualified as GHC
 import GHC.Data.Strict qualified as Strict
 import GHC.Driver.Errors.Types qualified as GHC
 import GHC.Types.Error qualified as GHC
-import GHC.Types.Hint qualified as GHC
 import GHC.Types.SourceError qualified as GHC
 import GHC.Utils.Error qualified as GHC
 import GHC.Core.FamInstEnv qualified as GHC
@@ -474,8 +474,8 @@ runPluginM pctx act = do
       -- 'withDefinitionContext'). A located diagnostic gives the error a
       -- proper "File.hs:l:c: error:" header, which editors and build
       -- tools can parse, and GHC renders the source snippet with the
-      -- caret itself; the previous 'ProgramError' bypassed the GHC
-      -- diagnostic pipeline and printed "<no location info>".
+      -- caret itself; a plain 'ProgramError' would bypass the GHC
+      -- diagnostic pipeline and print "<no location info>".
       let srcSpan = case snd truncated of
             Just ss -> GHC.RealSrcSpan ss Strict.Nothing
             Nothing -> GHC.noSrcSpan
@@ -483,7 +483,32 @@ runPluginM pctx act = do
       GHC.throwOneError
         . GHC.mkPlainErrorMsgEnvelope srcSpan
         . GHC.ghcUnknownMessage
-        $ GHC.mkPlainError GHC.noHints doc
+        $ PlinthDiagnostic doc (plinthErrorCode (fst errStack))
+
+{-| The diagnostic GHC reports when a Plinth compilation fails. Going
+through the 'GHC.Diagnostic' class gives the error a PLINTH error code
+next to the location header. -}
+data PlinthDiagnostic = PlinthDiagnostic GHC.SDoc GHC.DiagnosticCode
+
+instance GHC.Diagnostic PlinthDiagnostic where
+  type DiagnosticOpts PlinthDiagnostic = GHC.NoDiagnosticOpts
+  defaultDiagnosticOpts = GHC.NoDiagnosticOpts
+  diagnosticMessage _ (PlinthDiagnostic doc _) = GHC.mkSimpleDecorated doc
+  diagnosticReason _ = GHC.ErrorWithoutFlag
+  diagnosticHints _ = []
+  diagnosticCode (PlinthDiagnostic _ code) = Just code
+
+-- | A stable error code for each class of Plinth error.
+plinthErrorCode :: Error uni fun ann -> GHC.DiagnosticCode
+plinthErrorCode =
+  GHC.DiagnosticCode "PLINTH" . \case
+    PLCError {} -> 1
+    PIRError {} -> 2
+    CompilationError {} -> 3
+    UnsupportedError {} -> 4
+    FreeVariableError {} -> 5
+    InvalidMarkerError {} -> 6
+    CoreNameLookupError {} -> 7
 
 -- | Compiles all the marked expressions in the given binder into PLC literals.
 compileBind :: GHC.CoreBind -> PluginM PLC.DefaultUni PLC.DefaultFun GHC.CoreBind

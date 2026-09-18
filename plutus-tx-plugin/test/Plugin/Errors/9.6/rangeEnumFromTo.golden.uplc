@@ -1,1 +1,1 @@
-Error: Unsupported feature: Use of enumFromTo or enumFromThenTo, possibly via range syntax. Please use PlutusTx.Enum.enumFromTo or PlutusTx.Enum.enumFromThenTo instead.
+Error: Unsupported feature: Range syntax, use PlutusTx.Enum.enumFromTo or PlutusTx.Enum.enumFromThenTo
