@@ -640,10 +640,17 @@ hoistExpr var t = do
       addSpan = case varSpan of
         Nothing -> id
         Just src -> fmap . fmap . addSrcSpan $ src ^. srcSpanIso
+  -- The frame names the definition under compilation and carries its
+  -- source span, so errors deep inside a compiled function (its own
+  -- body, or its unfolding when it comes from another module) point at
+  -- that function instead of at the splice.
+  let def_msg = case varSpan of
+        Nothing -> "Compiling definition:" GHC.<+> GHC.ppr name
+        Just loc -> "Compiling definition at" GHC.<+> GHC.ppr loc GHC.<> ":" GHC.<+> GHC.ppr name
   case maybeDef of
     Just term -> pure term
     -- See Note [Dependency tracking]
-    Nothing -> withCurDef lexName $ do
+    Nothing -> withCurDef lexName . traceCompilationL 2 def_msg varSpan $ do
       var' <- compileVarFresh ann var
       -- See Note [Occurrences of recursive names]
       PIR.defineTerm
@@ -1024,8 +1031,14 @@ compileExpr mloc e = do
   let display_e = stripMarkersForDisplay [anchorName, unsupportedName] e
 
   case extractUnsupported unsupportedName e of
-    Just (msg, sp) -> traceCompilationL 2 (traceExprMsg (Just sp) GHC.$$ GHC.ppr display_e) (Just sp) $ do
-      throwPlain . UnsupportedError $ T.pack msg
+    -- The message already names the unsupported thing and the caret
+    -- shows the source, so the context frame only shows the head of
+    -- the application: the full expression can be large (e.g.
+    -- Prelude.error applied to its call stack).
+    Just (msg, sp) ->
+      let head_e = fst (GHC.collectArgs display_e)
+       in traceCompilationL 2 (traceExprMsg (Just sp) GHC.$$ GHC.ppr head_e) (Just sp) $ do
+            throwPlain . UnsupportedError $ T.pack msg
     Nothing -> pure ()
 
   case extractLoc anchorName maybeModBreaks e of
@@ -1575,33 +1588,9 @@ getSourceSpan mmb GHC.HpcTick {GHC.tickId = tid} = do
   return sp
 getSourceSpan _ _ = Nothing
 
-getVarSourceSpan :: GHC.Var -> Maybe GHC.RealSrcSpan
-getVarSourceSpan = GHC.srcSpanToRealSrcSpan . GHC.nameSrcSpan . GHC.varName
-
--- | The name of the file a 'GHC.RealSrcSpan' points to, with path separators
--- normalized to '/'.
---
--- GHC reports backslashes on Windows. Normalizing here makes source locations
--- (and any golden output derived from them) platform-independent.
-srcSpanNormFile :: GHC.RealSrcSpan -> String
-srcSpanNormFile = map (\c -> if c == '\\' then '/' else c) . GHC.unpackFS . GHC.srcSpanFile
-
-srcSpanIso :: Iso' GHC.RealSrcSpan SrcSpan
-srcSpanIso = iso fromGHC toGHC
-  where
-    fromGHC sp =
-      SrcSpan
-        { srcSpanFile = srcSpanNormFile sp
-        , srcSpanSLine = GHC.srcSpanStartLine sp
-        , srcSpanSCol = GHC.srcSpanStartCol sp
-        , srcSpanELine = GHC.srcSpanEndLine sp
-        , srcSpanECol = GHC.srcSpanEndCol sp
-        }
-    toGHC sp =
-      GHC.mkRealSrcSpan
-        (GHC.mkRealSrcLoc (fileNameFs sp) (srcSpanSLine sp) (srcSpanSCol sp))
-        (GHC.mkRealSrcLoc (fileNameFs sp) (srcSpanELine sp) (srcSpanECol sp))
-    fileNameFs = GHC.fsLit . srcSpanFile
+-- getVarSourceSpan, srcSpanNormFile and srcSpanIso live in
+-- PlutusTx.Compiler.Utils so that PlutusTx.Compiler.Type can use them
+-- without an import cycle.
 
 -- | Obviously this function computes a GHC.RealSrcSpan from a CovLoc
 toCovLoc :: GHC.RealSrcSpan -> CovLoc

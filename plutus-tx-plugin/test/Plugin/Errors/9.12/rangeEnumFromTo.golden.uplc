@@ -1,1 +1,1 @@
-Error: Unsupported feature: Int#: unboxed integers are not supported
+Error: Unsupported feature: Range syntax, use PlutusTx.Enum.enumFromTo or PlutusTx.Enum.enumFromThenTo

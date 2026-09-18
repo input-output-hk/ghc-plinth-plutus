@@ -1,2 +1,1 @@
-Error: Reference to a name which is not a local, a builtin, or an external INLINABLE function: Variable GHC.Num.Integer.integerAdd
-       No unfolding
+Error: Unsupported feature: Unbounded range syntax: unbounded ranges are not supported
