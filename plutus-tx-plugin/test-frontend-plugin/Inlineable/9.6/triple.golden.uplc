@@ -4,17 +4,10 @@
        (\factorial ->
           (\fibonacci ->
              (\total n ->
-                (\tot ->
-                   (\fac ->
-                      (\fib ->
-                         case
-                           (lessThanInteger n 0)
-                           [ (constr 0 [fib, fac, tot])
-                           , ((\x -> error)
-                                (forced "triple: negative input" ())) ])
-                        (fibonacci n))
-                     (factorial n))
-                  (total n))
+                case
+                  (lessThanInteger n 0)
+                  [ (constr 0 [(fibonacci n), (factorial n), (total n)])
+                  , ((\x -> error) (forced "triple: negative input" ())) ])
                ((\s -> s s)
                   (\s n ->
                      case

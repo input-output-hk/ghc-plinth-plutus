@@ -10,12 +10,12 @@ letrec
           {integer}
           ds
           {bool}
-          True
+          False
           (\(x : integer) (xs : List integer) ->
              case
                (all dead. bool)
                (equalsInteger 1 x)
-               [(/\dead -> go xs), (/\dead -> False)]
+               [(/\dead -> go xs), (/\dead -> True)]
                {all dead. dead})
 in
 let
@@ -28,4 +28,4 @@ let
         (\(ds : integer) (ds : List integer) -> Cons {integer} ds ds)
         (Nil {integer})
 in
-go ls
+case bool (go ls) [True, False]

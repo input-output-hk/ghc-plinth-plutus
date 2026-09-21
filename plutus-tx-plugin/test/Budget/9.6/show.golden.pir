@@ -326,10 +326,6 @@ letrec
                {all dead. dead})
 in
 let
-  !`$fShowInteger_$cshow` : integer -> string
-    = \(x : integer) ->
-        concatBuiltinStrings
-          (`$fShowBuiltinByteString_$cshowsPrec` 0 x (Nil {string}))
   data (Show :: * -> *) a | Show_match where
     CConsShow :
       (integer -> a -> List string -> List string) -> (a -> string) -> Show a
@@ -337,11 +333,17 @@ let
     = CConsShow
         {integer}
         `$fShowBuiltinByteString_$cshowsPrec`
-        `$fShowInteger_$cshow`
+        (\(x : integer) ->
+           concatBuiltinStrings
+             (`$fShowBuiltinByteString_$cshowsPrec` 0 x (Nil {string})))
   data (Tuple5 :: * -> * -> * -> * -> * -> *) a b c d e | Tuple5_match where
     Tuple5 : a -> b -> c -> d -> e -> Tuple5 a b c d e
   !a : integer
-    = trace {integer} (`$fShowInteger_$cshow` -1234567890) -1234567890
+    = trace
+        {integer}
+        (concatBuiltinStrings
+           (`$fShowBuiltinByteString_$cshowsPrec` 0 -1234567890 (Nil {string})))
+        -1234567890
   !b : integer = trace {integer} "This is an example" a
   !c : integer
     = trace
@@ -366,14 +368,7 @@ let
         concatBuiltinStrings
           ((let
                !showElem : integer -> List string -> List string
-                 = Show_match
-                     {integer}
-                     `$fShowInteger`
-                     {integer -> integer -> List string -> List string}
-                     (\(v : integer -> integer -> List string -> List string)
-                       (v : integer -> string) ->
-                        v)
-                     0
+                 = `$fShowBuiltinByteString_$cshowsPrec` 0
              in
              letrec
                !go : List integer -> List string -> List string

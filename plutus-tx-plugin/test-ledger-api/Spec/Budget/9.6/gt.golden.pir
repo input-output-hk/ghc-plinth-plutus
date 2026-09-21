@@ -80,6 +80,9 @@ letrec
                        (\(ds : Tuple2 bytestring (These integer integer))
                          (xs :
                             List (Tuple2 bytestring (These integer integer))) ->
+                          let
+                            ~`$j` : bool = go xs
+                          in
                           /\dead ->
                             Tuple2_match
                               {bytestring}
@@ -87,21 +90,29 @@ letrec
                               ds
                               {bool}
                               (\(ds : bytestring) (x : These integer integer) ->
-                                 case
-                                   (all dead. bool)
-                                   (These_match
-                                      {integer}
-                                      {integer}
-                                      x
-                                      {bool}
-                                      (\(b : integer) ->
-                                         lessThanEqualsInteger b 0)
-                                      (\(a : integer) (b : integer) ->
-                                         lessThanEqualsInteger b a)
-                                      (\(a : integer) ->
-                                         lessThanEqualsInteger 0 a))
-                                   [(/\dead -> False), (/\dead -> go xs)]
-                                   {all dead. dead}))
+                                 These_match
+                                   {integer}
+                                   {integer}
+                                   x
+                                   {bool}
+                                   (\(b : integer) ->
+                                      case
+                                        (all dead. bool)
+                                        (lessThanEqualsInteger b 0)
+                                        [(/\dead -> False), (/\dead -> `$j`)]
+                                        {all dead. dead})
+                                   (\(a : integer) (b : integer) ->
+                                      case
+                                        (all dead. bool)
+                                        (lessThanEqualsInteger b a)
+                                        [(/\dead -> False), (/\dead -> `$j`)]
+                                        {all dead. dead})
+                                   (\(a : integer) ->
+                                      case
+                                        (all dead. bool)
+                                        (lessThanEqualsInteger 0 a)
+                                        [(/\dead -> False), (/\dead -> `$j`)]
+                                        {all dead. dead})))
                        {all dead. dead}
              in
              Tuple2_match
@@ -177,6 +188,9 @@ in
 let
   !equalsByteString : bytestring -> bytestring -> bool
     = \(x : bytestring) (y : bytestring) -> equalsByteString x y
+  data (Maybe :: * -> *) a | Maybe_match where
+    Just : a -> Maybe a
+    Nothing : Maybe a
   !union :
      all k v r.
        (\a -> a -> a -> bool) k ->
@@ -227,6 +241,18 @@ let
                               x
                               {Tuple2 k (These v r)}
                               (\(c : k) (i : v) ->
+                                 let
+                                   !`$j` : Maybe r -> These v r
+                                     = \(b' : Maybe r) ->
+                                         Maybe_match
+                                           {r}
+                                           b'
+                                           {all dead. These v r}
+                                           (\(b : r) ->
+                                              /\dead -> These {v} {r} i b)
+                                           (/\dead -> This {v} {r} i)
+                                           {all dead. dead}
+                                 in
                                  letrec
                                    !go : List (Tuple2 k r) -> These v r
                                      = \(ds : List (Tuple2 k r)) ->
@@ -234,7 +260,7 @@ let
                                            {Tuple2 k r}
                                            ds
                                            {all dead. These v r}
-                                           (/\dead -> This {v} {r} i)
+                                           (/\dead -> `$j` (Nothing {r}))
                                            (\(ds : Tuple2 k r)
                                              (xs' : List (Tuple2 k r)) ->
                                               /\dead ->
@@ -249,7 +275,7 @@ let
                                                        (`$dEq` c' c)
                                                        [ (/\dead -> go xs')
                                                        , (/\dead ->
-                                                            These {v} {r} i i) ]
+                                                            `$j` (Just {r} i)) ]
                                                        {all dead. dead}))
                                            {all dead. dead}
                                  in
@@ -769,12 +795,16 @@ in
               {(\k v -> List (Tuple2 k v)) bytestring integer}
               equalsByteString
               (\(ds : (\k v -> List (Tuple2 k v)) bytestring integer) -> go ds)
-              (unordEqWith
-                 {bytestring}
-                 {integer}
-                 equalsByteString
-                 (\(v : integer) -> equalsInteger 0 v)
-                 (\(x : integer) (y : integer) -> equalsInteger x y))
+              (\(ds : (\k v -> List (Tuple2 k v)) bytestring integer)
+                (ds : (\k v -> List (Tuple2 k v)) bytestring integer) ->
+                 unordEqWith
+                   {bytestring}
+                   {integer}
+                   equalsByteString
+                   (\(v : integer) -> equalsInteger 0 v)
+                   (\(x : integer) (y : integer) -> equalsInteger x y)
+                   ds
+                   ds)
               l
               r)
            [True, False]) ]
