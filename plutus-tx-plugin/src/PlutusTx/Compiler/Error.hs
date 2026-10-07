@@ -91,7 +91,7 @@ instance
     CompilationError e -> "Unexpected error during compilation, please report this to the Plutus team:" PP.<+> PP.pretty e
     UnsupportedError e -> "Unsupported feature:" PP.<+> PP.pretty e
     FreeVariableError e ->
-      "Reference to a name which is not a local, a builtin, or an external INLINABLE function:"
+      "Reference to a name which is not a local, a builtin, or an external function with an available definition:"
         PP.<+> PP.pretty e
     InvalidMarkerError e -> "Found invalid marker, not applied correctly in expression" PP.<+> PP.pretty e
     CoreNameLookupError n -> "Unable to get Core name needed for the plugin to function: " PP.<+> PP.viaShow n
