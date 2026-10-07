@@ -6,8 +6,9 @@
 {-# LANGUAGE TypeApplications #-}
 -- This ensures that we don't put *anything* about these functions into the interface
 -- file, otherwise GHC can be clever about the ones that are always error, even though
--- they're OPAQUE!
-{-# OPTIONS_GHC -O0 #-}
+-- they're OPAQUE! uplc-ghc needs the explicit -fomit-interface-pragmas: there, -O0 does
+-- not imply it (see Note [Keep interface pragmas] in ghc:GHC.Driver.Session).
+{-# OPTIONS_GHC -O0 -fomit-interface-pragmas #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
 {-# HLINT ignore "Use newtype instead of data" #-}

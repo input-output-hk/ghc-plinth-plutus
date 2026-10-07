@@ -399,6 +399,19 @@ isProbablyUnboundedRange (GHC.getName -> n)
     methodName = GHC.occNameString (GHC.nameOccName n)
 isProbablyUnboundedRange _ = False
 
+{-| Explain why a top-level definition has no unfolding at all. Other cases (e.g.
+the 'GHC.OtherCon' unfolding of a loop breaker, or primops and foreign calls, which
+have no Core definition) get no hint. See Note [Unfoldings]. -}
+noUnfoldingHint :: GHC.Id -> GHC.SDoc
+noUnfoldingHint n
+  | GHC.isExternalName (GHC.getName n)
+  , GHC.VanillaId <- GHC.idDetails n
+  , GHC.NoUnfolding <- GHC.realIdUnfolding n =
+      GHC.text "The definition of"
+        GHC.<+> GHC.quotes (GHC.ppr n)
+        GHC.<+> GHC.text "is not available. Remove its NOINLINE or OPAQUE pragma."
+  | otherwise = GHC.empty
+
 {- Note [GHC runtime errors]
 GHC has a number of runtime errors for things like pattern matching failures and so on.
 
@@ -493,9 +506,17 @@ a good idea or if the binding is marked INLINABLE (or if you use `-fexpose-all-u
 
 We use unfoldings to get the definitions of non-locally bound names. We then hoist these into
 definitions using PIR's support for definitions. This allows a relatively direct form of code
-reuse - provided that the code you are reusing has unfoldings! In practice this means you may
-need to scatter some INLINABLE pragmas around, but we may be able to improve this in future,
-see e.g. https://gitlab.haskell.org/ghc/ghc/issues/10871.
+reuse - provided that the code you are reusing has unfoldings!
+
+With uplc-ghc, users do not need to write INLINABLE pragmas:
+- the plugin adds INLINABLE to every binding that has no inline pragma of its own (see
+  'addInlineables' in PlutusTx.Plugin.Boilerplate);
+- base, ghc-prim and ghc-bignum, which uplc-ghc does not compile, are built with
+  -fexpose-all-unfoldings (hadrian flavour transformer expose_unfoldings);
+- -O0 does not imply -fomit-interface-pragmas and -fignore-interface-pragmas, see
+  Note [Keep interface pragmas] in ghc:GHC.Driver.Session.
+Thus only a NOINLINE or OPAQUE pragma (or an explicit -fomit-interface-pragmas) hides a
+definition ('noUnfoldingHint').
 
 (Since unfoldings are updated as the compiler progresses, unfoldings for bindings in other
 modules are typically fully-optimized. The exception is the unfoldings for INLINABLE bindings,
@@ -1373,6 +1394,7 @@ compileExpr mloc e = do
                       GHC.<+> GHC.ppr n
                       GHC.$+$ (GHC.ppr $ GHC.idDetails n)
                       GHC.$+$ (GHC.ppr $ GHC.realIdUnfolding n)
+                      GHC.$+$ noUnfoldingHint n
         -- arg can be a type here, in which case it's a type instantiation
         l `GHC.App` GHC.Type t -> do
           l' <- compileExpr Nothing l
